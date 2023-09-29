@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 import numpy as np
 
@@ -225,12 +226,14 @@ def test_compile_link_matmul():
     np.random.seed(3)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_dir = Path.home() / "triton" / "test_aot"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
 
         dtype = "fp16"
         BM, BN, BK = 16, 16, 16
 
         kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
-        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints=["", ":16"])
+        compile_aot_kernels(tmp_dir, kernel_path, dtype, BM, BN, BK, ha_hb_hints=[""])
         link_aot_kernels(tmp_dir)
 
         # compile test case

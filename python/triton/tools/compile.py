@@ -48,6 +48,7 @@ if __name__ == "__main__":
     parser.add_argument("--out-path", "-o", type=Path, default=None, help="Out filename")
     parser.add_argument("--signature", "-s", type=str, help="Signature of the kernel", required=True)
     parser.add_argument("--grid", "-g", type=str, help="Launch grid of the kernel", required=True)
+    parser.add_argument("--debug-dump", "-dbg", action='store_true', help="Dump all IR and Cubin to files")
     args = parser.parse_args()
 
     out_name = args.out_name if args.out_name else args.kernel_name
@@ -114,6 +115,16 @@ if __name__ == "__main__":
 
     # dump C stub code
     suffix = kernel_suffix(signature.values(), config)
+
+    if args.debug_dump:
+        for ir_name in ccinfo.asm:
+            f = out_path.with_suffix(f".{sig_hash}_{suffix}.{ir_name}")
+            if type(ccinfo.asm[ir_name]) is str:
+                f.write_text(ccinfo.asm[ir_name])
+            else:
+                f.write_bytes(ccinfo.asm[ir_name])
+
+
     func_name = '_'.join([out_name, sig_hash, suffix])
     triton_kernel_name = '_'.join([args.kernel_name, suffix])
     hex_ = str(binascii.hexlify(ccinfo.asm["cubin"]))[2:-1]

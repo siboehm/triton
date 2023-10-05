@@ -81,8 +81,7 @@ public:
     // forwarding on mma->mma shortcut, lower distributed->distributed otherwise
     if (srcLayout.isa<MmaEncodingAttr>() && dstLayout.isa<MmaEncodingAttr>()) {
       if (isMmaToMmaShortcut(srcTy, dstTy)) {
-        rewriter.replaceOp(op, op.getSrc());
-        return success();
+        return lowerMmaToMma(op, adaptor, rewriter);
       }
     }
     if (isaDistributedLayout(srcLayout) && isaDistributedLayout(dstLayout)) {
@@ -178,9 +177,11 @@ private:
       Value _16 = i32_val(16);
       if (mmaLayout.isAmpere() || mmaLayout.isHopper()) {
         multiDimWarpId[0] =
-            urem(multiDimWarpId[0], i32_val(shapePerCTA[0] / instrShape[0]));
+            urem(multiDimWarpId[0],
+                 i32_val(ceil<unsigned>(shapePerCTA[0], instrShape[0])));
         multiDimWarpId[1] =
-            urem(multiDimWarpId[1], i32_val(shapePerCTA[1] / instrShape[1]));
+            urem(multiDimWarpId[1],
+                 i32_val(ceil<unsigned>(shapePerCTA[1], instrShape[1])));
 
         Value mmaGrpId = udiv(laneId, _4);
         Value mmaGrpIdP8 = add(mmaGrpId, _8);
@@ -961,6 +962,43 @@ private:
       return success();
     }
     return failure();
+  }
+
+  // mma -> mma
+  LogicalResult lowerMmaToMma(triton::gpu::ConvertLayoutOp op,
+                              OpAdaptor adaptor,
+                              ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    auto srcTy = op.getSrc().getType().cast<RankedTensorType>();
+    auto dstTy = op.getResult().getType().cast<RankedTensorType>();
+    if (triton::gpu::getTotalElemsPerThread(srcTy) ==
+        triton::gpu::getTotalElemsPerThread(dstTy)) {
+      rewriter.replaceOp(op, op.getSrc());
+      return success();
+    }
+    // get source values
+    auto vals = getTypeConverter()->unpackLLElements(loc, adaptor.getSrc(),
+                                                     rewriter, srcTy);
+    SmallVector<Value> retVals;
+    SmallVector<unsigned> dstElementPerThread =
+        triton::gpu::getElemsPerThread(dstTy);
+    SmallVector<unsigned> srcElementPerThread =
+        triton::gpu::getElemsPerThread(srcTy);
+    for (unsigned j = 0; j < dstElementPerThread[0]; j++) {
+      for (unsigned i = 0; i < dstElementPerThread[1]; i++) {
+        if (i >= srcElementPerThread[1] || j >= srcElementPerThread[0]) {
+          retVals.push_back(undef(vals[0].getType()));
+          continue;
+        }
+        unsigned index = i + j * srcElementPerThread[1];
+        retVals.push_back(vals[index]);
+      }
+    }
+    assert(retVals.size() == triton::gpu::getTotalElemsPerThread(dstTy));
+    Value view =
+        getTypeConverter()->packLLElements(loc, retVals, rewriter, dstTy);
+    rewriter.replaceOp(op, view);
+    return success();
   }
 
   // shared -> dot_operand if the result layout is mma
